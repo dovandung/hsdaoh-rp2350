@@ -41,7 +41,19 @@ The IOs used for input are GP0-11, GP20-22 and GP26.
 
 Samples 8 GPIOs (GP0-7) with a single PIO instruction per sample, packing four samples per FIFO word, by default at 112 MHz (3 cycles per sample at 336 MHz). The sample period is set with LA8_CYCLES_PER_SAMPLE in logic_analyzer_8bit.c.
 
-The logic_analyzer_8bit_triggered build waits for a rising or falling edge on one of the inputs and then streams a fixed-length burst at the same rate, re-arming automatically. The trigger time of every burst is sent as a second hsdaoh stream (stream ID 1) and printed on the USB serial port. Trigger channel, edge, burst length and burst count are set at the top of logic_analyzer_8bit.c.
+The logic_analyzer_8bit_triggered build waits for a rising or falling edge on one of the inputs and then streams a fixed-length burst at the same rate, re-arming automatically. The trigger time of every burst is sent as a second hsdaoh stream (stream ID 1) and printed on the USB serial port. The defaults for trigger channel, edge, burst length and burst count are set at the top of logic_analyzer_8bit.c, and can be changed at runtime with commands on the USB serial port:
+
+| Command | Function |
+|---|---|
+| `t <gpio> [r\|f]` | trigger GPIO, optionally the edge (rising/falling) |
+| `e <r\|f>` | trigger edge |
+| `l <lines>` | burst length in hsdaoh lines |
+| `n <count>` | number of bursts, 0 = re-arm forever |
+| `a` | (re)arm with the current settings |
+| `s` | stop |
+| `?` | help and current settings |
+
+Changes re-arm immediately if the capture is running.
 
 ### internal_adc
 
