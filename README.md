@@ -37,7 +37,19 @@ This application uses the PIO to generate a 16-bit counter value which is writte
 Sample 16 GPIOs with the PIO and transfer the data, can be used as a 16 bit @ 56 MHz logic analyzer (two samples are packed per PIO FIFO word, 6 cycles per sample at 336 MHz).
 The IOs used for input are GP0-11, GP20-22 and GP26.
 
-The logic_analyzer_triggered build waits for a rising or falling edge on one of the inputs and then streams a fixed-length burst at 48 MHz, re-arming automatically. The trigger time of every burst is sent as a second hsdaoh stream (stream ID 1) and printed on the USB serial port. Trigger channel, edge, burst length and burst count are set at the top of logic_analyzer.c.
+The logic_analyzer_triggered build waits for a rising or falling edge on one of the inputs and then streams a fixed-length burst at 48 MHz, re-arming automatically. The trigger time of every burst is sent as a second hsdaoh stream (stream ID 1) and printed on the USB serial port. The defaults for trigger channel, edge, burst length and burst count are set at the top of logic_analyzer.c, and can be changed at runtime with commands on the USB serial port:
+
+| Command | Function |
+|---|---|
+| `t <gpio> [r\|f]` | trigger GPIO, optionally the edge (rising/falling) |
+| `e <r\|f>` | trigger edge |
+| `l <lines>` | burst length in hsdaoh lines |
+| `n <count>` | number of bursts, 0 = re-arm forever |
+| `a` | (re)arm with the current settings |
+| `s` | stop |
+| `?` | help and current settings |
+
+Changes re-arm immediately if the capture is running.
 
 ### internal_adc
 
