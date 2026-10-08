@@ -2,7 +2,7 @@
  * hsdaoh - High Speed Data Acquisition over MS213x USB3 HDMI capture sticks
  * Implementation for the Raspberry Pi RP2350 HSTX peripheral
  *
- * 16 bit logic analyzer example
+ * 16 bit logic analyzer example, with optional edge trigger and burst capture
  *
  * Copyright (c) 2024 by Steve Markgraf <steve@steve-m.de>
  *
@@ -32,6 +32,9 @@
  * SUCH DAMAGE.
  */
 
+#include <stdio.h>
+#include <string.h>
+
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
@@ -43,19 +46,60 @@
 #include "picohsdaoh.h"
 #include "16bit_input.pio.h"
 
-/* The PIO is running with sys_clk, and needs 10 cycles per sample,
- * so the LA is sampling with 32 MHz */
-#define SYS_CLK		320000
+/* ------------------------------------------------------------------------
+ * Configuration
+ * ------------------------------------------------------------------------ */
 
-#define PIO_INPUT_PIN_BASE 0
+/* 336 MHz gives integer sample rates: 56 MS/s continuous, 48 MS/s triggered.
+ * (320 MHz also works: 53.33 / 45.71 MS/s) */
+#define SYS_CLK			336000
 
-#define DMACH_PIO_PING 0
-#define DMACH_PIO_PONG 1
+#define LA_MODE_CONTINUOUS	0	/* stream everything, like the original example */
+#define LA_MODE_TRIGGERED	1	/* wait for an edge, then stream a fixed-length burst */
 
+#ifndef LA_MODE
+#define LA_MODE			LA_MODE_CONTINUOUS
+#endif
+
+/* PIO clock divider, integer only (1 = full speed) */
+#define SAMPLE_CLKDIV		1
+
+/* Triggered mode settings */
+#define TRIGGER_GPIO		0	/* any of the sampled GPIOs */
+#define TRIGGER_FALLING_EDGE	false
+#define BURST_SLICES		64	/* burst length in hsdaoh lines (1916 samples each) */
+#define BURST_COUNT		0	/* number of bursts, 0 = re-arm forever, 1 = single shot */
+#define PRINT_BURSTS		1	/* also print burst timestamps on the USB serial port */
+
+/* ------------------------------------------------------------------------ */
+
+#if LA_MODE == LA_MODE_TRIGGERED
+#define CYCLES_PER_SAMPLE	7
+#else
+#define CYCLES_PER_SAMPLE	6
+#endif
+
+/* exact sample rate, reported to the host via the hsdaoh metadata */
+#define SAMPLE_RATE_HZ		((SYS_CLK * 1000u) / (CYCLES_PER_SAMPLE * SAMPLE_CLKDIV))
+
+/* Two samples per DMA word, so use an even number of samples per line */
+#define LA_DATA_LEN		(RBUF_MAX_DATA_LEN & ~1u)
+#define BURST_SAMPLES		(BURST_SLICES * LA_DATA_LEN)
+
+#define LA_PIO			pio0
+#define DMACH_PIO_PING		0
+#define DMACH_PIO_PONG		1
+
+static uint sm_data;
 static bool pio_dma_pong = false;
-uint16_t ringbuffer[RBUF_DEFAULT_TOTAL_LEN];
-int ringbuf_head = 2;
+uint16_t __attribute__((aligned(4))) ringbuffer[RBUF_DEFAULT_TOTAL_LEN];
 
+/* index of the slice the most recently (re)programmed DMA channel writes to */
+static int ringbuf_head = 0;
+
+/* hsdaoh sends the slices up to (head - 2), and starts at slice (slices - 1).
+ * Ping starts there and pong at slice 0, so no slice is skipped and no slice
+ * is sent while it is still being written. */
 void __scratch_y("") pio_dma_irq_handler()
 {
 	uint ch_num = pio_dma_pong ? DMACH_PIO_PONG : DMACH_PIO_PING;
@@ -66,17 +110,80 @@ void __scratch_y("") pio_dma_irq_handler()
 	ringbuf_head = (ringbuf_head + 1) % RBUF_DEFAULT_SLICES;
 
 	ch->write_addr = (uintptr_t)&ringbuffer[ringbuf_head * RBUF_SLICE_LEN];
-	ch->transfer_count = RBUF_MAX_DATA_LEN;
+	ch->transfer_count = LA_DATA_LEN / 2;
 
 	hsdaoh_update_head(0, ringbuf_head);
 }
 
+#if LA_MODE == LA_MODE_TRIGGERED
+/* ------------------------------------------------------------------------
+ * Burst timestamps, sent as a second hsdaoh stream (like the audio streams
+ * of the ADC examples). One line per burst, three 64 bit words:
+ *   [0] burst number
+ *   [1] index of the first sample of this burst in stream 0
+ *   [2] time of the trigger in microseconds since boot
+ * ------------------------------------------------------------------------ */
+#define TS_STREAM_ID		1
+#define TS_SLICES		8
+#define TS_DATA_LEN		(3 * 4)	/* in 16 bit words */
+
+typedef struct {
+	uint64_t burst;
+	uint64_t first_sample;
+	uint64_t time_us;
+} burst_record_t;
+
+uint16_t __attribute__((aligned(8))) ts_ringbuffer[TS_SLICES * RBUF_SLICE_LEN];
+static int ts_slice = TS_SLICES - 1;
+static volatile uint32_t bursts_started = 0;
+static burst_record_t burst_log[TS_SLICES];	/* copy for printing */
+static uint32_t bursts_armed = 0;
+
+static inline void arm_burst(void)
+{
+	/* the program samples x + 1 times */
+	pio_sm_put(LA_PIO, sm_data, BURST_SAMPLES - 1);
+	bursts_armed++;
+}
+
+/* Equivalent of gusmanb's "irq 1 -> NMI": the PIO raises IRQ 0 when the
+ * trigger fires, we run at the highest priority and timestamp it. */
+void __scratch_y("") pio_trigger_irq_handler()
+{
+	uint64_t now = time_us_64();
+	pio_interrupt_clear(LA_PIO, 0);
+
+	burst_record_t rec = {
+		.burst = bursts_started,
+		.first_sample = (uint64_t)bursts_started * BURST_SAMPLES,
+		.time_us = now,
+	};
+	memcpy(&ts_ringbuffer[ts_slice * RBUF_SLICE_LEN], &rec, sizeof(rec));
+	burst_log[bursts_started % TS_SLICES] = rec;
+	hsdaoh_update_head(TS_STREAM_ID, (ts_slice + 2) % TS_SLICES);
+	ts_slice = (ts_slice + 1) % TS_SLICES;
+
+	bursts_started++;
+
+	/* queue the next burst while this one is running: zero re-arm time */
+	if (BURST_COUNT == 0 || bursts_armed < BURST_COUNT)
+		arm_burst();
+}
+#endif
+
 void init_pio_input(void)
 {
-	PIO pio = pio0;
-	uint offset = pio_add_program(pio, &la_16bit_input_program);
-	uint sm_data = pio_claim_unused_sm(pio, true);
-	la_16bit_input_program_init(pio, sm_data, offset, PIO_INPUT_PIN_BASE);
+	PIO pio = LA_PIO;
+	sm_data = pio_claim_unused_sm(pio, true);
+
+#if LA_MODE == LA_MODE_TRIGGERED
+	uint offset = pio_add_program(pio, &la_16bit_triggered_program);
+	la_16bit_triggered_program_init(pio, sm_data, offset, SAMPLE_CLKDIV,
+					TRIGGER_GPIO, TRIGGER_FALLING_EDGE);
+#else
+	uint offset = pio_add_program(pio, &la_16bit_continuous_program);
+	la_16bit_continuous_program_init(pio, sm_data, offset, SAMPLE_CLKDIV);
+#endif
 
 	dma_channel_config c;
 	c = dma_channel_get_default_config(DMACH_PIO_PING);
@@ -84,14 +191,14 @@ void init_pio_input(void)
 	channel_config_set_dreq(&c, pio_get_dreq(pio, sm_data, false));
 	channel_config_set_read_increment(&c, false);
 	channel_config_set_write_increment(&c, true);
-	channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+	channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
 
 	dma_channel_configure(
 		DMACH_PIO_PING,
 		&c,
-		&ringbuffer[0 * RBUF_SLICE_LEN],
+		&ringbuffer[(RBUF_DEFAULT_SLICES - 1) * RBUF_SLICE_LEN],
 		&pio->rxf[sm_data],
-		RBUF_MAX_DATA_LEN,
+		LA_DATA_LEN / 2,
 		false
 	);
 	c = dma_channel_get_default_config(DMACH_PIO_PONG);
@@ -99,14 +206,14 @@ void init_pio_input(void)
 	channel_config_set_dreq(&c, pio_get_dreq(pio, sm_data, false));
 	channel_config_set_read_increment(&c, false);
 	channel_config_set_write_increment(&c, true);
-	channel_config_set_transfer_data_size(&c, DMA_SIZE_16);
+	channel_config_set_transfer_data_size(&c, DMA_SIZE_32);
 
 	dma_channel_configure(
 		DMACH_PIO_PONG,
 		&c,
-		&ringbuffer[1 * RBUF_SLICE_LEN],
+		&ringbuffer[0 * RBUF_SLICE_LEN],
 		&pio->rxf[sm_data],
-		RBUF_MAX_DATA_LEN,
+		LA_DATA_LEN / 2,
 		false
 	);
 
@@ -116,6 +223,17 @@ void init_pio_input(void)
 	irq_set_enabled(DMA_IRQ_0, true);
 
 	dma_channel_start(DMACH_PIO_PING);
+
+#if LA_MODE == LA_MODE_TRIGGERED
+	pio_set_irq0_source_enabled(pio, pis_interrupt0, true);
+	irq_set_exclusive_handler(PIO0_IRQ_0, pio_trigger_irq_handler);
+	irq_set_priority(PIO0_IRQ_0, PICO_HIGHEST_IRQ_PRIORITY);
+	irq_set_enabled(PIO0_IRQ_0, true);
+
+	arm_burst();
+#endif
+
+	pio_sm_set_enabled(pio, sm_data, true);
 }
 
 int main()
@@ -136,10 +254,35 @@ int main()
 	stdio_init_all();
 
 	hsdaoh_init(GPIO_DRIVE_STRENGTH_4MA, GPIO_SLEW_RATE_SLOW);
-	hsdaoh_add_stream(0, 1, (SYS_CLK/8) * 1000, RBUF_MAX_DATA_LEN, RBUF_DEFAULT_SLICES, ringbuffer);
+	hsdaoh_add_stream(0, RAW_16BIT, SAMPLE_RATE_HZ, LA_DATA_LEN, RBUF_DEFAULT_SLICES, ringbuffer);
+#if LA_MODE == LA_MODE_TRIGGERED
+	hsdaoh_add_stream(TS_STREAM_ID, RAW_64BIT, 0, TS_DATA_LEN, TS_SLICES, ts_ringbuffer);
+#endif
 	hsdaoh_start();
 	init_pio_input();
 
+#if LA_MODE == LA_MODE_TRIGGERED && PRINT_BURSTS
+	uint32_t printed = 0;
+	uint64_t last_us = 0;
+
+	while (1) {
+		while (printed == bursts_started)
+			__wfi();
+
+		/* if bursts arrive faster than USB serial can print, skip ahead */
+		if (bursts_started - printed > TS_SLICES)
+			printed = bursts_started - TS_SLICES;
+
+		burst_record_t rec = burst_log[printed % TS_SLICES];
+
+		printf("burst %llu: first sample %llu, t = %llu us (+%llu us)\n",
+		       rec.burst, rec.first_sample, rec.time_us,
+		       printed ? rec.time_us - last_us : 0);
+		last_us = rec.time_us;
+		printed++;
+	}
+#else
 	while (1)
 		__wfi();
+#endif
 }
