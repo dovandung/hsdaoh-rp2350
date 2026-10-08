@@ -124,8 +124,8 @@ static inline void la_8bit_continuous_program_init(PIO pio, uint sm, uint pin_ba
 	pio_sm_init(pio, sm, offset, &c);
 }
 
-/* cycles_per_sample: 2 - 33 */
-static inline void la_8bit_triggered_program_init(PIO pio, uint sm, uint pin_base,
+/* cycles_per_sample: 2 - 33, returns the program offset */
+static inline uint la_8bit_triggered_program_init(PIO pio, uint sm, uint pin_base,
 						  uint cycles_per_sample, uint clkdiv,
 						  uint trigger_gpio, bool falling_edge)
 {
@@ -144,5 +144,7 @@ static inline void la_8bit_triggered_program_init(PIO pio, uint sm, uint pin_bas
 
 	/* Y = edge select */
 	pio_sm_exec(pio, sm, pio_encode_set(pio_y, falling_edge ? 1 : 0));
+
+	return offset;
 }
 %}
