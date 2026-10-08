@@ -1,40 +1,33 @@
-add_executable(logic_analyzer
-	logic_analyzer.c
-)
+# logic_analyzer_add(<target> <bits> <mode>)
+#   bits: 16 or 8, mode: 0 = continuous, 1 = triggered (see logic_analyzer.c)
+function(logic_analyzer_add target bits mode)
+	add_executable(${target}
+		${CMAKE_CURRENT_LIST_DIR}/logic_analyzer.c
+	)
 
-target_compile_options(logic_analyzer PRIVATE -Wall)
+	target_compile_options(${target} PRIVATE -Wall)
+	target_compile_definitions(${target} PRIVATE LA_BITS=${bits} LA_MODE=${mode})
 
-target_link_libraries(logic_analyzer
-	pico_stdlib
-	pico_util
-	hardware_pio
-	hardware_dma
-	libpicohsdaoh
-)
-pico_generate_pio_header(logic_analyzer ${CMAKE_CURRENT_LIST_DIR}/16bit_input.pio)
+	target_link_libraries(${target}
+		pico_stdlib
+		pico_util
+		hardware_pio
+		hardware_dma
+		libpicohsdaoh
+	)
+	pico_generate_pio_header(${target} ${CMAKE_CURRENT_LIST_DIR}/${bits}bit_input.pio)
 
-# enable usb output, disable uart output
-pico_enable_stdio_usb(logic_analyzer 1)
+	# enable usb output, disable uart output
+	pico_enable_stdio_usb(${target} 1)
 
-# create map/bin/hex file etc.
-pico_add_extra_outputs(logic_analyzer)
+	# create map/bin/hex file etc.
+	pico_add_extra_outputs(${target})
+endfunction()
 
-# Same app with the edge trigger / burst capture mode enabled
-add_executable(logic_analyzer_triggered
-	logic_analyzer.c
-)
+# 16 channels: GP0-11, GP20-22, GP26
+logic_analyzer_add(logic_analyzer 16 0)
+logic_analyzer_add(logic_analyzer_triggered 16 1)
 
-target_compile_options(logic_analyzer_triggered PRIVATE -Wall)
-target_compile_definitions(logic_analyzer_triggered PRIVATE LA_MODE=1)
-
-target_link_libraries(logic_analyzer_triggered
-	pico_stdlib
-	pico_util
-	hardware_pio
-	hardware_dma
-	libpicohsdaoh
-)
-pico_generate_pio_header(logic_analyzer_triggered ${CMAKE_CURRENT_LIST_DIR}/16bit_input.pio)
-
-pico_enable_stdio_usb(logic_analyzer_triggered 1)
-pico_add_extra_outputs(logic_analyzer_triggered)
+# 8 channels: GP0-7
+logic_analyzer_add(logic_analyzer_8bit 8 0)
+logic_analyzer_add(logic_analyzer_8bit_triggered 8 1)

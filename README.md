@@ -39,6 +39,8 @@ The IOs used for input are GP0-11, GP20-22 and GP26.
 
 The logic_analyzer_triggered build waits for a rising or falling edge on one of the inputs and then streams a fixed-length burst at 48 MHz, re-arming automatically. The trigger time of every burst is sent as a second hsdaoh stream (stream ID 1) and printed on the USB serial port. Trigger channel, edge, burst length and burst count are set at the top of logic_analyzer.c.
 
+The logic_analyzer_8bit and logic_analyzer_8bit_triggered builds sample 8 channels on GP0-7 with a single PIO instruction per sample, by default at 112 MHz (3 cycles per sample at 336 MHz). The sample period is set with LA8_CYCLES_PER_SAMPLE in logic_analyzer.c and is the same in both modes.
+
 ### internal_adc
 
 The data from the internal ADC is streamed out via USB. Default configuration is overclocking the ADC to 3.33 MS/s. Using the USB PLL and overvolting beyond VREG_VOLTAGE_MAX, up to 7.9 MS/s can be achieved.

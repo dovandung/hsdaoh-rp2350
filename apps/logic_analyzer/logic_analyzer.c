@@ -2,7 +2,7 @@
  * hsdaoh - High Speed Data Acquisition over MS213x USB3 HDMI capture sticks
  * Implementation for the Raspberry Pi RP2350 HSTX peripheral
  *
- * 16 bit logic analyzer example, with optional edge trigger and burst capture
+ * 16 / 8 bit logic analyzer example, with optional edge trigger and burst capture
  *
  * Copyright (c) 2024 by Steve Markgraf <steve@steve-m.de>
  *
@@ -32,6 +32,7 @@
  * SUCH DAMAGE.
  */
 
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -44,15 +45,29 @@
 #include "hardware/pio.h"
 
 #include "picohsdaoh.h"
-#include "16bit_input.pio.h"
 
 /* ------------------------------------------------------------------------
  * Configuration
  * ------------------------------------------------------------------------ */
 
-/* 336 MHz gives integer sample rates: 56 MS/s continuous, 48 MS/s triggered.
- * (320 MHz also works: 53.33 / 45.71 MS/s) */
+/* Channel count: 16 (GP0-11, GP20-22, GP26) or 8 (8 contiguous GPIOs) */
+#ifndef LA_BITS
+#define LA_BITS			16
+#endif
+
+/* 336 MHz gives integer sample rates:
+ *  16 bit: 56 MS/s continuous, 48 MS/s triggered (fixed by the program length)
+ *  8 bit:  336 MHz / LA8_CYCLES_PER_SAMPLE, same rate in both modes */
 #define SYS_CLK			336000
+
+/* 8 bit only: first of the 8 inputs (0 - 4, GP12 - GP19 are used by HSTX) */
+#define LA8_PIN_BASE		0
+
+/* 8 bit only: PIO cycles per sample, 2 - 32 (1 in continuous mode).
+ * 3 = 112 MS/s = 112 MByte/s. 2 = 168 MS/s is above what the hsdaoh examples
+ * have been shown to sustain (~144 MByte/s); if the capture stick can't keep
+ * up, the host reports overflows. */
+#define LA8_CYCLES_PER_SAMPLE	3
 
 #define LA_MODE_CONTINUOUS	0	/* stream everything, like the original example */
 #define LA_MODE_TRIGGERED	1	/* wait for an edge, then stream a fixed-length burst */
@@ -67,24 +82,45 @@
 /* Triggered mode settings */
 #define TRIGGER_GPIO		0	/* any of the sampled GPIOs */
 #define TRIGGER_FALLING_EDGE	false
-#define BURST_SLICES		64	/* burst length in hsdaoh lines (1916 samples each) */
+#define BURST_SLICES		64	/* burst length in hsdaoh lines (1916 samples each, 3832 in 8 bit mode) */
 #define BURST_COUNT		0	/* number of bursts, 0 = re-arm forever, 1 = single shot */
 #define PRINT_BURSTS		1	/* also print burst timestamps on the USB serial port */
 
 /* ------------------------------------------------------------------------ */
 
+#if LA_BITS == 16
+#include "16bit_input.pio.h"
 #if LA_MODE == LA_MODE_TRIGGERED
 #define CYCLES_PER_SAMPLE	7
 #else
 #define CYCLES_PER_SAMPLE	6
 #endif
+#define SAMPLES_PER_WORD	1	/* samples per 16 bit hsdaoh word */
+#define STREAM_FORMAT		RAW_16BIT
+
+#elif LA_BITS == 8
+#include "8bit_input.pio.h"
+#define CYCLES_PER_SAMPLE	LA8_CYCLES_PER_SAMPLE
+#define SAMPLES_PER_WORD	2
+#define STREAM_FORMAT		RAW_8BIT
+
+static_assert(LA8_PIN_BASE + 7 < 12, "8 bit inputs must not overlap the HSTX pins GP12 - GP19");
+static_assert(LA_MODE != LA_MODE_TRIGGERED ||
+	      (TRIGGER_GPIO >= LA8_PIN_BASE && TRIGGER_GPIO < LA8_PIN_BASE + 8),
+	      "TRIGGER_GPIO must be one of the 8 inputs");
+static_assert(CYCLES_PER_SAMPLE >= (LA_MODE == LA_MODE_TRIGGERED ? 2 : 1) &&
+	      CYCLES_PER_SAMPLE <= 32, "LA8_CYCLES_PER_SAMPLE out of range");
+#else
+#error "LA_BITS must be 8 or 16"
+#endif
 
 /* exact sample rate, reported to the host via the hsdaoh metadata */
 #define SAMPLE_RATE_HZ		((SYS_CLK * 1000u) / (CYCLES_PER_SAMPLE * SAMPLE_CLKDIV))
 
-/* Two samples per DMA word, so use an even number of samples per line */
+/* 32 bit DMA words, so use an even number of 16 bit words per line */
 #define LA_DATA_LEN		(RBUF_MAX_DATA_LEN & ~1u)
-#define BURST_SAMPLES		(BURST_SLICES * LA_DATA_LEN)
+#define SAMPLES_PER_LINE	(LA_DATA_LEN * SAMPLES_PER_WORD)
+#define BURST_SAMPLES		(BURST_SLICES * SAMPLES_PER_LINE)
 
 #define LA_PIO			pio0
 #define DMACH_PIO_PING		0
@@ -176,13 +212,19 @@ void init_pio_input(void)
 	PIO pio = LA_PIO;
 	sm_data = pio_claim_unused_sm(pio, true);
 
-#if LA_MODE == LA_MODE_TRIGGERED
+#if LA_BITS == 16 && LA_MODE == LA_MODE_TRIGGERED
 	uint offset = pio_add_program(pio, &la_16bit_triggered_program);
 	la_16bit_triggered_program_init(pio, sm_data, offset, SAMPLE_CLKDIV,
 					TRIGGER_GPIO, TRIGGER_FALLING_EDGE);
-#else
+#elif LA_BITS == 16
 	uint offset = pio_add_program(pio, &la_16bit_continuous_program);
 	la_16bit_continuous_program_init(pio, sm_data, offset, SAMPLE_CLKDIV);
+#elif LA_MODE == LA_MODE_TRIGGERED
+	la_8bit_triggered_program_init(pio, sm_data, LA8_PIN_BASE, CYCLES_PER_SAMPLE,
+				       SAMPLE_CLKDIV, TRIGGER_GPIO, TRIGGER_FALLING_EDGE);
+#else
+	la_8bit_continuous_program_init(pio, sm_data, LA8_PIN_BASE, CYCLES_PER_SAMPLE,
+					SAMPLE_CLKDIV);
 #endif
 
 	dma_channel_config c;
@@ -254,7 +296,7 @@ int main()
 	stdio_init_all();
 
 	hsdaoh_init(GPIO_DRIVE_STRENGTH_4MA, GPIO_SLEW_RATE_SLOW);
-	hsdaoh_add_stream(0, RAW_16BIT, SAMPLE_RATE_HZ, LA_DATA_LEN, RBUF_DEFAULT_SLICES, ringbuffer);
+	hsdaoh_add_stream(0, STREAM_FORMAT, SAMPLE_RATE_HZ, LA_DATA_LEN, RBUF_DEFAULT_SLICES, ringbuffer);
 #if LA_MODE == LA_MODE_TRIGGERED
 	hsdaoh_add_stream(TS_STREAM_ID, RAW_64BIT, 0, TS_DATA_LEN, TS_SLICES, ts_ringbuffer);
 #endif
