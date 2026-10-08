@@ -21,6 +21,15 @@ To build hsdaoh-rp2350:
 
 After the build succeeds you can copy the resulting *.uf2 file of the application you want to run to the board.
 
+### Building with VS Code
+
+1. Install [VS Code](https://code.visualstudio.com/) and the [Raspberry Pi Pico extension](https://marketplace.visualstudio.com/items?itemName=raspberry-pi.raspberry-pi-pico).
+2. Open the hsdaoh-rp2350 folder. The extension recognizes the project and downloads Pico SDK 2.3.1, the ARM toolchain, CMake, Ninja and picotool on first use.
+3. Click **Compile** in the status bar (or run the *Compile Project* task). All apps are built for the Pico 2; the .uf2 files end up in `build/apps/<app>/`.
+4. To flash, hold BOOTSEL while plugging in the board and copy the .uf2 file, or use **Run**, which asks which program to load. **Debug** needs a debug probe (e.g. the Raspberry Pi Debug Probe).
+
+The project defaults to `PICO_BOARD=pico2`. Apps for an RP2350B board (dual_external_adc, sdr) need a different board: change `PICO_BOARD` in the top-level CMakeLists.txt or use *Switch Board* in the extension.
+
 Apart from the Pico2 with the [Pico-DVI-Sock](https://github.com/Wren6991/Pico-DVI-Sock), it also should work with the Adafruit Feather RP2350 with HSTX Port, but so far only the Pico2 was tested.
 
 ## Example applications
