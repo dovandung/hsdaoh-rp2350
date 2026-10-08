@@ -37,6 +37,12 @@ This application uses the PIO to generate a 16-bit counter value which is writte
 Sample 16 GPIOs with the PIO and transfer the data, can be used as a 16 bit @ 32 MHz logic analyzer, or be adapted to 8 bit @ 64 MHz and so on.
 The IOs used for input are GP0-11, GP20-22 and GP26.
 
+### logic_analyzer_8bit
+
+Samples 8 GPIOs (GP0-7) with a single PIO instruction per sample, packing four samples per FIFO word, by default at 112 MHz (3 cycles per sample at 336 MHz). The sample period is set with LA8_CYCLES_PER_SAMPLE in logic_analyzer_8bit.c.
+
+The logic_analyzer_8bit_triggered build waits for a rising or falling edge on one of the inputs and then streams a fixed-length burst at the same rate, re-arming automatically. The trigger time of every burst is sent as a second hsdaoh stream (stream ID 1) and printed on the USB serial port. Trigger channel, edge, burst length and burst count are set at the top of logic_analyzer_8bit.c.
+
 ### internal_adc
 
 The data from the internal ADC is streamed out via USB. Default configuration is overclocking the ADC to 3.33 MS/s. Using the USB PLL and overvolting beyond VREG_VOLTAGE_MAX, up to 7.9 MS/s can be achieved.

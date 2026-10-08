@@ -1,0 +1,148 @@
+;
+; Copyright (c) 2024 Steve Markgraf <steve@steve-m.de>
+;
+; SPDX-License-Identifier: BSD-3-Clause
+;
+; 8 bit logic analyzer
+;
+; The 8 inputs are contiguous (default GP0 - GP7), so a single "in pins, 8"
+; captures all channels in one cycle, no gathering through the OSR needed.
+; Four samples are packed per 32 bit FIFO word (autopush), the first sample in
+; the lowest byte, so the ringbuffer holds the samples as a plain byte stream.
+;
+; The sample period is set at load time by patching the delay field of the
+; marked instructions (the same trick gusmanb uses for his trigger program),
+; see la_8bit_load_program(). Both programs then run at exactly the same rate.
+
+.pio_version 0
+
+;--------------------------------------------------------------------------------------------
+; Continuous streaming, 1 instruction per sample
+;--------------------------------------------------------------------------------------------
+.program la_8bit_continuous
+
+.wrap_target
+public sample:
+	in pins, 8	; delay patched to (cycles per sample - 1)
+.wrap
+
+;--------------------------------------------------------------------------------------------
+; Triggered burst capture, same structure as the 16 bit version:
+; the CPU arms each burst with (samples - 1) in the TX FIFO, Y selects the
+; edge (0 = rising, !0 = falling), "irq 0" marks the start of every burst.
+; The sample count must be a multiple of 4 so every burst ends on a full word.
+;--------------------------------------------------------------------------------------------
+.program la_8bit_triggered
+
+.wrap_target
+arm:
+	pull block		; wait until the CPU arms the next burst
+	out x, 32		; x = samples in this burst - 1
+	jmp !y rising
+
+falling:
+	jmp pin wait_low	; line must be high first ...
+	jmp falling
+wait_low:
+	jmp pin wait_low	; ... then wait for it to go low
+	jmp start
+
+rising:
+	jmp pin rising		; line must be low first ...
+wait_high:
+	jmp pin start		; ... then wait for it to go high
+	jmp wait_high
+
+start:
+	irq 0			; notify the CPU: burst started, take timestamp
+
+public sample:
+	in pins, 8		; delay patched to (cycles per sample - 2)
+	jmp x-- sample
+.wrap				; burst done -> back to "arm"
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+#define LA_8BIT_MAX_PROGRAM_LEN 32
+
+/* Copy a program to RAM, set the delay of the instruction at sample_offset,
+ * and load it. Returns the offset in PIO instruction memory. */
+static inline uint la_8bit_load_program(PIO pio, const pio_program_t *prog,
+					uint sample_offset, uint delay)
+{
+	static uint16_t instr[LA_8BIT_MAX_PROGRAM_LEN];
+	pio_program_t patched = *prog;
+
+	hard_assert(prog->length <= LA_8BIT_MAX_PROGRAM_LEN && delay <= 31);
+
+	for (uint i = 0; i < prog->length; i++)
+		instr[i] = prog->instructions[i];
+
+	/* no side-set is used, so all 5 delay/side-set bits are delay */
+	instr[sample_offset] = (instr[sample_offset] & ~(0x1fu << 8)) | (delay << 8);
+
+	patched.instructions = instr;
+	return pio_add_program(pio, &patched);
+}
+
+static inline void la_8bit_common_init(PIO pio, uint sm, pio_sm_config *c,
+				       uint pin_base, uint clkdiv)
+{
+	for (uint gpio = pin_base; gpio < pin_base + 8; gpio++) {
+		pio_gpio_init(pio, gpio);
+		gpio_set_pulls(gpio, false, false);
+	}
+	pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 8, false);
+
+	sm_config_set_in_pins(c, pin_base);
+
+	/* shift right + autopush at 32: four 8 bit samples per FIFO word */
+	sm_config_set_in_shift(c, true, true, 32);
+
+	/* used by "out x, 32" of the triggered program */
+	sm_config_set_out_shift(c, true, false, 32);
+
+	/* integer divider only: a fractional divider would add sample jitter */
+	sm_config_set_clkdiv(c, (float)clkdiv);
+}
+
+/* cycles_per_sample: 1 - 32 */
+static inline void la_8bit_continuous_program_init(PIO pio, uint sm, uint pin_base,
+						   uint cycles_per_sample, uint clkdiv)
+{
+	uint offset = la_8bit_load_program(pio, &la_8bit_continuous_program,
+					   la_8bit_continuous_offset_sample,
+					   cycles_per_sample - 1);
+	pio_sm_config c = la_8bit_continuous_program_get_default_config(offset);
+
+	la_8bit_common_init(pio, sm, &c, pin_base, clkdiv);
+
+	/* We only receive, so join the FIFOs: 8 words = 32 samples of headroom */
+	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+	pio_sm_init(pio, sm, offset, &c);
+}
+
+/* cycles_per_sample: 2 - 33 */
+static inline void la_8bit_triggered_program_init(PIO pio, uint sm, uint pin_base,
+						  uint cycles_per_sample, uint clkdiv,
+						  uint trigger_gpio, bool falling_edge)
+{
+	uint offset = la_8bit_load_program(pio, &la_8bit_triggered_program,
+					   la_8bit_triggered_offset_sample,
+					   cycles_per_sample - 2);
+	pio_sm_config c = la_8bit_triggered_program_get_default_config(offset);
+
+	la_8bit_common_init(pio, sm, &c, pin_base, clkdiv);
+
+	/* trigger channel, read by "jmp pin" */
+	sm_config_set_jmp_pin(&c, trigger_gpio);
+
+	/* TX FIFO is needed for arming, so no FIFO join here */
+	pio_sm_init(pio, sm, offset, &c);
+
+	/* Y = edge select */
+	pio_sm_exec(pio, sm, pio_encode_set(pio_y, falling_edge ? 1 : 0));
+}
+%}
