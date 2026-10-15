@@ -7,10 +7,16 @@
  * sample in the high byte). Triggering and saving is done on the PC by
  * hsdaoh_la.
  *
- * Sample rate = SYS_CLK / divider, divider is an integer >= 3 so that the
- * HDMI link (HSTX = SYS_CLK) can carry the data. Default 320 MHz / 3 =
- * 106.67 MS/s. The divider can be changed at runtime over the USB serial
- * port: send "div 4" (and Enter), "?" shows the current setting.
+ * Sample rate = SYS_CLK / integer divider. The HDMI (HSTX) clock comes either
+ * from the USB PLL (LA_HSTX_USB_PLL=1, default, like the sdr app) so it is
+ * independent of the system clock, or from the system clock:
+ *
+ *   default      HSTX 432 MHz (USB PLL, VCO 1728 MHz), sys 316 MHz / 2 = 158 MS/s
+ *   HSTX 384     HSTX 384 MHz (USB PLL, VCO 1536 MHz), sys 280 MHz / 2 = 140 MS/s
+ *   USB_PLL=0    HSTX = sys 320 MHz,                    sys 320 MHz / 3 = 106.67 MS/s
+ *
+ * The divider can be changed at runtime over the USB serial port:
+ * send "div 4" (and Enter), "?" shows the current setting.
  *
  * SPDX-License-Identifier: BSD-3-Clause
  */
@@ -26,12 +32,42 @@
 #include "hardware/vreg.h"
 #include "hardware/dma.h"
 #include "hardware/pio.h"
+#include "hardware/pll.h"
 
 #include "picohsdaoh.h"
 #include "la8.pio.h"
 
+#ifndef LA_HSTX_USB_PLL
+#define LA_HSTX_USB_PLL	1		/* HDMI clock from the USB PLL */
+#endif
+
+#if LA_HSTX_USB_PLL
+#ifndef HSTX_CLK_MHZ
+#define HSTX_CLK_MHZ	432		/* VCO = 4x; must be a multiple of 48 (USB clock) */
+#endif
+#ifndef SYS_CLK
+#define SYS_CLK		316000		/* kHz */
+#endif
+#ifndef SAMPLE_DIV
+#define SAMPLE_DIV	2
+#endif
+#define HSTX_CLK_KHZ	(HSTX_CLK_MHZ * 1000)
+#if HSTX_CLK_MHZ % 48
+#error "HSTX_CLK_MHZ must be a multiple of 48 so the USB clock can stay at 48 MHz"
+#endif
+#if HSTX_CLK_MHZ * 4 < 750
+#error "USB PLL VCO (4 x HSTX_CLK_MHZ) must be at least 750 MHz"
+#endif
+#else
+#ifndef SYS_CLK
 #define SYS_CLK		320000		/* kHz, also the HSTX (HDMI) clock */
-#define SAMPLE_DIV	3		/* sample rate = SYS_CLK / SAMPLE_DIV */
+#endif
+#ifndef SAMPLE_DIV
+#define SAMPLE_DIV	3
+#endif
+#define HSTX_CLK_KHZ	SYS_CLK
+#endif
+
 #define LA_PIN_BASE	0		/* GP0..GP7; GP0..GP11 are free, GP12..19 are HSTX */
 
 #if LA_PIN_BASE > 4
@@ -71,8 +107,9 @@ static uint min_divider(void)
 {
 	double samples_per_hstx_cycle = 2.0 * RBUF_MAX_DATA_LEN * MODE_V_ACTIVE_LINES /
 					(5.0 * MODE_H_TOTAL_PIXELS * MODE_V_TOTAL_LINES);
+	double samples_per_sys_cycle = samples_per_hstx_cycle * HSTX_CLK_KHZ / SYS_CLK;
 	uint d = 1;
-	while (1.0 / d > 0.95 * samples_per_hstx_cycle)
+	while (1.0 / d > 0.95 * samples_per_sys_cycle)
 		d++;
 	return d;
 }
@@ -120,9 +157,10 @@ static void init_pio_input(void)
 static void print_status(void)
 {
 	uint32_t r = rate_for(cur_div);
-	printf("la8: GP%d..GP%d, %lu.%03lu MS/s (sys %d MHz / %u), minimum divider %u\n",
+	printf("la8: GP%d..GP%d, %lu.%03lu MS/s (sys %d MHz / %u), minimum divider %u, HDMI %d MHz (%s)\n",
 	       LA_PIN_BASE, LA_PIN_BASE + 7, (unsigned long)(r / 1000000),
-	       (unsigned long)((r / 1000) % 1000), SYS_CLK / 1000, cur_div, min_divider());
+	       (unsigned long)((r / 1000) % 1000), SYS_CLK / 1000, cur_div, min_divider(),
+	       HSTX_CLK_KHZ / 1000, LA_HSTX_USB_PLL ? "USB PLL" : "sys clock");
 	printf("commands: div <n>   ?\n");
 }
 
@@ -155,10 +193,24 @@ int main()
 	sleep_us(SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST_DELAY_US);
 	hsdaoh_set_sys_clock_khz(SYS_CLK);
 
-	/* HSTX clock = sys_clk / 1 */
+#if LA_HSTX_USB_PLL
+	/* As in the sdr app: run the USB PLL at HSTX_CLK_MHZ and use it for
+	 * HSTX. USB itself still needs 48 MHz, so divide it down first. */
+	hw_write_masked(&clocks_hw->clk[clk_usb].div,
+			(HSTX_CLK_MHZ / 48) << CLOCKS_CLK_USB_DIV_INT_LSB,
+			CLOCKS_CLK_USB_DIV_INT_BITS);
+	pll_init(pll_usb, 1, HSTX_CLK_MHZ * 4 * MHZ, 2, 2);
+#endif
+
+	/* HSTX clock = source / 1 */
 	hw_write_masked(&clocks_hw->clk[clk_hstx].div,
 			1 << CLOCKS_CLK_HSTX_DIV_INT_LSB,
 			CLOCKS_CLK_HSTX_DIV_INT_BITS);
+#if LA_HSTX_USB_PLL
+	hw_write_masked(&clocks_hw->clk[clk_hstx].ctrl,
+			CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB << CLOCKS_CLK_HSTX_CTRL_AUXSRC_LSB,
+			CLOCKS_CLK_HSTX_CTRL_AUXSRC_BITS);
+#endif
 
 	stdio_init_all();
 
