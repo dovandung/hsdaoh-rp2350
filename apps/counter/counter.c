@@ -6,7 +6,7 @@
  *
  * The HDMI (HSTX) clock runs from the USB PLL (like the sdr app), independent
  * of the system clock. The PIO needs 3 cycles per sample.
- *   counter      HSTX 432 MHz, 300 MHz / (3 * 1.25) = 80 MS/s (link load 96%)
+ *   counter      set by COUNTER_PRESET in counter_config.h (60/70/74/75/78/80)
  *   counter_70m  HSTX 384 MHz, 315 MHz / (3 * 1.5)  = 70 MS/s (95%)
  *   counter_60m  HSTX 336 MHz, 270 MHz / (3 * 1.5)  = 60 MS/s (93%)
  * With USB clocked from the system PLL (any HDMI clock, sys 336 MHz):
@@ -54,16 +54,10 @@
 #include "picohsdaoh.h"
 #include "counter.pio.h"
 
-/* defaults: 80 MS/s; the other counter_* targets in CMakeLists.txt override these */
-#ifndef SYS_CLK
-#define SYS_CLK		300000			/* kHz */
-#endif
-#ifndef HSTX_CLK_MHZ
-#define HSTX_CLK_MHZ	432			/* HDMI clock from the USB PLL, VCO = 4 x this */
-#endif
-#ifndef COUNTER_CLKDIV
-#define COUNTER_CLKDIV	1.25f			/* PIO divider, use multiples of 1/256 (exact) */
-#endif
+/* speed: set COUNTER_PRESET in counter_config.h (the counter_* targets in
+ * CMakeLists.txt pass their own settings instead) */
+#include "counter_config.h"
+
 /* Where USB gets its 48 MHz:
  *   0 = from the USB PLL: HSTX_CLK_MHZ must be a multiple of 48
  *   1 = from the system PLL (as the sdr app's USE_SYS_CLK_FOR_USB): SYS_CLK

@@ -1,5 +1,5 @@
 # counter variants, HDMI clock from the USB PLL:
-#   counter      HSTX 432 MHz, 80 MS/s
+#   counter      speed set by COUNTER_PRESET in counter_config.h (default 70 MS/s)
 #   counter_70m  HSTX 384 MHz, 70 MS/s
 #   counter_60m  HSTX 336 MHz, 60 MS/s (same HDMI speed as sys_clk 336 MHz)
 #   counter_74m / _75m / _78m  HSTX 399 / 408 / 420 MHz, USB clocked from the system PLL
