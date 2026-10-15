@@ -116,8 +116,12 @@ void init_pio_input(void)
 
 int main()
 {
-	vreg_set_voltage(VREG_VOLTAGE_MAX);
-	sleep_us(SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST_DELAY_US);
+	/* 1.50 V core voltage. This is above VREG_VOLTAGE_MAX (1.30 V), so the
+	 * SDK's voltage limit has to be lifted first. Higher voltage = more heat
+	 * and faster chip wear. */
+	vreg_disable_voltage_limit();
+	vreg_set_voltage(VREG_VOLTAGE_1_50);
+	sleep_ms(100);		/* let the voltage settle before overclocking */
 	hsdaoh_set_sys_clock_khz(SYS_CLK);
 
 	/* set HSTX clock to sysclk/1 */
@@ -133,7 +137,12 @@ int main()
 	hsdaoh_add_stream(0, 1, (SYS_CLK/8) * 1000, RBUF_MAX_DATA_LEN, RBUF_DEFAULT_SLICES, ringbuffer);
 	hsdaoh_start();
 	init_pio_input();
+	gpio_init(PICO_DEFAULT_LED_PIN);
+	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
+	bool led = false;
 	while (1)
-		__wfi();
+		led = !led;
+		gpio_put(PICO_DEFAULT_LED_PIN, led);
+		sleep_ms(500);
 }
