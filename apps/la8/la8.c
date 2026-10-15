@@ -11,9 +11,10 @@
  * from the USB PLL (LA_HSTX_USB_PLL=1, default, like the sdr app) so it is
  * independent of the system clock, or from the system clock:
  *
- *   default      HSTX 432 MHz (USB PLL, VCO 1728 MHz), sys 316 MHz / 2 = 158 MS/s
- *   HSTX 384     HSTX 384 MHz (USB PLL, VCO 1536 MHz), sys 280 MHz / 2 = 140 MS/s
- *   USB_PLL=0    HSTX = sys 320 MHz,                    sys 320 MHz / 3 = 106.67 MS/s
+ *   140 (default)  HSTX 384 MHz (USB PLL, VCO 1536 MHz), sys 280 MHz / 2 = 140 MS/s
+ *   158            HSTX 432 MHz (USB PLL, VCO 1728 MHz), sys 316 MHz / 2 = 158 MS/s
+ *   106            HSTX = sys 320 MHz,                    sys 320 MHz / 3 = 106.67 MS/s
+ * Selected with LA8_PRESET in la8_config.h.
  *
  * The divider can be changed at runtime over the USB serial port:
  * send "div 4" (and Enter), "?" shows the current setting.
@@ -37,20 +38,11 @@
 #include "picohsdaoh.h"
 #include "la8.pio.h"
 
-#ifndef LA_HSTX_USB_PLL
-#define LA_HSTX_USB_PLL	1		/* HDMI clock from the USB PLL */
-#endif
+/* speed: set LA8_PRESET in la8_config.h (the la8_* targets in
+ * CMakeLists.txt pass their own LA8_PRESET instead) */
+#include "la8_config.h"
 
 #if LA_HSTX_USB_PLL
-#ifndef HSTX_CLK_MHZ
-#define HSTX_CLK_MHZ	432		/* VCO = 4x; must be a multiple of 48 (USB clock) */
-#endif
-#ifndef SYS_CLK
-#define SYS_CLK		316000		/* kHz */
-#endif
-#ifndef SAMPLE_DIV
-#define SAMPLE_DIV	2
-#endif
 #define HSTX_CLK_KHZ	(HSTX_CLK_MHZ * 1000)
 #if HSTX_CLK_MHZ % 48
 #error "HSTX_CLK_MHZ must be a multiple of 48 so the USB clock can stay at 48 MHz"
@@ -59,12 +51,6 @@
 #error "USB PLL VCO (4 x HSTX_CLK_MHZ) must be at least 750 MHz"
 #endif
 #else
-#ifndef SYS_CLK
-#define SYS_CLK		320000		/* kHz, also the HSTX (HDMI) clock */
-#endif
-#ifndef SAMPLE_DIV
-#define SAMPLE_DIV	3
-#endif
 #define HSTX_CLK_KHZ	SYS_CLK
 #endif
 
