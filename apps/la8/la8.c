@@ -175,8 +175,14 @@ static void handle_line(char *line)
 
 int main()
 {
-	vreg_set_voltage(VREG_VOLTAGE_MAX);
-	sleep_us(SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST_DELAY_US);
+	/* 1.50 V core voltage, as in the counter app. VREG_VOLTAGE_MAX is only
+	 * 1.30 V on the RP2350, which is not enough for HSTX at 384 MHz: the
+	 * HDMI clock lane still runs but the data lanes fail. Above 1.30 V the
+	 * SDK's voltage limit has to be lifted first. */
+	vreg_disable_voltage_limit();
+	vreg_set_voltage(VREG_VOLTAGE_1_50);
+	sleep_ms(100);		/* let the voltage settle before overclocking */
+
 	hsdaoh_set_sys_clock_khz(SYS_CLK);
 
 #if LA_HSTX_USB_PLL
