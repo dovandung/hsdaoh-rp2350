@@ -1,7 +1,8 @@
-# la8 variants:
-#   la8         HDMI clock 432 MHz from the USB PLL, 316 MHz / 2 = 158 MS/s
-#   la8_384     HDMI clock 384 MHz from the USB PLL (VCO within spec), 280 MHz / 2 = 140 MS/s
-#   la8_sysclk  HDMI clock = system clock 320 MHz, 320 MHz / 3 = 106.67 MS/s
+# la8 targets:
+#   la8      speed from LA8_PRESET in la8_config.h (default 140 MS/s)
+#   la8_140  HDMI clock 384 MHz from the USB PLL, 280 MHz / 2 = 140 MS/s
+#   la8_158  HDMI clock 432 MHz from the USB PLL, 316 MHz / 2 = 158 MS/s
+#   la8_106  HDMI clock = system clock 320 MHz, 320 MHz / 3 = 106.67 MS/s
 function(add_la8 name)
 	add_executable(${name} la8.c)
 	target_compile_options(${name} PRIVATE -Wall)
@@ -21,6 +22,7 @@ function(add_la8 name)
 	pico_add_extra_outputs(${name})
 endfunction()
 
-add_la8(la8)
-add_la8(la8_384 HSTX_CLK_MHZ=384 SYS_CLK=280000 SAMPLE_DIV=2)
-add_la8(la8_sysclk LA_HSTX_USB_PLL=0)
+add_la8(la8)			# speed from LA8_PRESET in la8_config.h (default 140 MS/s)
+add_la8(la8_140 LA8_PRESET=140)
+add_la8(la8_158 LA8_PRESET=158)
+add_la8(la8_106 LA8_PRESET=106)
