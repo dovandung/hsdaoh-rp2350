@@ -323,6 +323,16 @@ int hsdaoh_add_stream(uint16_t stream_id, uint16_t format, uint32_t samplerate, 
 	return 0;
 }
 
+/* change the sample rate reported to the host for a running stream */
+void hsdaoh_set_stream_srate(uint16_t stream_id, uint32_t samplerate)
+{
+	if (stream_id >= MAX_STREAMS)
+		return;
+
+	streams[stream_id].srate = samplerate;
+	metadata.stream_info[stream_id].srate = samplerate;
+}
+
 int hsdaoh_remove_stream(uint16_t stream_id)
 {
 	if (stream_id >= MAX_STREAMS)
