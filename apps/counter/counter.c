@@ -191,6 +191,14 @@ int main()
 	hsdaoh_start();
 	init_pio_input();
 
-	while (1)
-		__wfi();
+	/* blink the LED once per second to show the firmware is running */
+	gpio_init(PICO_DEFAULT_LED_PIN);
+	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
+
+	bool led = false;
+	while (1) {
+		led = !led;
+		gpio_put(PICO_DEFAULT_LED_PIN, led);
+		sleep_ms(500);
+	}
 }
