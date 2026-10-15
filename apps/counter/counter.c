@@ -4,10 +4,11 @@
  *
  * PIO counter value example, counter can be verified with hsdaoh_test
  *
- * 80 MS/s: the HDMI (HSTX) clock runs at 432 MHz from the USB PLL (like the
- * sdr app), independent of the 300 MHz system clock. The PIO needs 3 cycles
- * per sample, so 300 MHz / (3 * 1.25) = 80 MS/s exactly. The link carries
- * 83.3 M words/s at 432 MHz, so this is 96% load.
+ * The HDMI (HSTX) clock runs from the USB PLL (like the sdr app), independent
+ * of the system clock. The PIO needs 3 cycles per sample.
+ *   counter      HSTX 432 MHz, 300 MHz / (3 * 1.25) = 80 MS/s (link load 96%)
+ *   counter_70m  HSTX 384 MHz, 315 MHz / (3 * 1.5)  = 70 MS/s (95%)
+ *   counter_60m  HSTX 336 MHz, 270 MHz / (3 * 1.5)  = 60 MS/s (93%)
  *
  * Copyright (c) 2024 by Steve Markgraf <steve@steve-m.de>
  *
@@ -49,9 +50,16 @@
 #include "picohsdaoh.h"
 #include "counter.pio.h"
 
+/* defaults: 80 MS/s; the counter_70m / counter_60m targets override these */
+#ifndef SYS_CLK
 #define SYS_CLK		300000			/* kHz */
-#define HSTX_CLK_MHZ	432			/* from the USB PLL (VCO 1728 MHz), multiple of 48 */
+#endif
+#ifndef HSTX_CLK_MHZ
+#define HSTX_CLK_MHZ	432			/* from the USB PLL (VCO = 4x), multiple of 48 */
+#endif
+#ifndef COUNTER_CLKDIV
 #define COUNTER_CLKDIV	1.25f			/* exact in the PIO's 16.8 fixed point divider */
+#endif
 #define COUNTER_RATE	((uint32_t)(SYS_CLK * 1000.0 / (3 * COUNTER_CLKDIV) + 0.5))	/* 80 MS/s */
 
 #if HSTX_CLK_MHZ % 48
