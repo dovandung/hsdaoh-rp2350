@@ -558,8 +558,9 @@ void init_pio_input(void)
 int main()
 {
 	/* set maximum 'allowed' voltage without voiding warranty */
-	vreg_set_voltage(VREG_VOLTAGE_MAX);
-	sleep_us(SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST_DELAY_US);
+	vreg_disable_voltage_limit();
+	vreg_set_voltage(VREG_VOLTAGE_1_50);
+	sleep_ms(100);		/* let the voltage settle before overclocking */
 
 	hsdaoh_set_sys_clock_khz(SYS_CLK);
 
