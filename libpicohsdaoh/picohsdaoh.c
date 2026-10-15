@@ -283,10 +283,15 @@ void __scratch_x("") hstx_dma_irq_handler()
 		v_scanline = (v_scanline + 1) % MODE_V_TOTAL_LINES;
 }
 
+#define HSDAOH_CORE1_READY	0x48535458	/* "HSTX" */
+
 void core1_entry()
 {
 	irq_set_exclusive_handler(DMA_IRQ_3, hstx_dma_irq_handler);
 	irq_set_enabled(DMA_IRQ_3, true);
+
+	/* tell core 0 that the HSTX DMA interrupt is handled now */
+	multicore_fifo_push_blocking(HSDAOH_CORE1_READY);
 
 	while (1)
 		__wfi();
@@ -295,6 +300,18 @@ void core1_entry()
 void hsdaoh_start(void)
 {
 	multicore_launch_core1(core1_entry);
+
+	/* Start the HSTX DMA only after core 1 has installed its interrupt
+	 * handler. The first transfers are short vblank lines (~25 us each);
+	 * if the chain wraps around before the handler reconfigures a channel,
+	 * that channel restarts with a stale read address and feeds random
+	 * memory to the HSTX command expander, which then stays out of step
+	 * for good (frames at twice the rate, host never synchronizes).
+	 * How long core 1 takes to start depends on flash/XIP timing, i.e. on
+	 * the code layout, so this failed or worked depending on the build. */
+	while (multicore_fifo_pop_blocking() != HSDAOH_CORE1_READY)
+		;
+
 	dma_channel_start(DMACH_HSTX_START);
 }
 
