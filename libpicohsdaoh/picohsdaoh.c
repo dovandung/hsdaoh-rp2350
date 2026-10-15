@@ -283,6 +283,57 @@ void __scratch_x("") hstx_dma_irq_handler()
 		v_scanline = (v_scanline + 1) % MODE_V_TOTAL_LINES;
 }
 
+/*
+ * BUG FIXED HERE (Oct 2026): race between core 1 startup and the HSTX DMA
+ * ------------------------------------------------------------------------
+ * Original code:
+ *
+ *	void hsdaoh_start(void)
+ *	{
+ *		multicore_launch_core1(core1_entry);
+ *		dma_channel_start(DMACH_HSTX_START);
+ *	}
+ *
+ * The HSTX output is fed by three DMA channels (DMACH_HSTX_START..+2) that
+ * chain to each other in a ring. hsdaoh_init() configures all three with the
+ * same 7-word vblank command list. From then on each channel must be
+ * reconfigured by hstx_dma_irq_handler() (running on core 1) when it
+ * finishes, before the ring comes back to it two transfers later.
+ *
+ * The DMA was started immediately after multicore_launch_core1(), without
+ * waiting for core 1 to install that handler. The first transfers are short
+ * vblank lines, about 25 us each at a 384 MHz HSTX clock, so the chain comes
+ * back to the first channel after about 75 us. If core 1 is not ready by
+ * then, that channel is retriggered with its old, already advanced read
+ * address and reload count: it sends whatever lies in memory after the
+ * vblank command list (other command lists, then unrelated data) to the
+ * HSTX FIFO. The HSTX command expander interprets those words as commands
+ * and data, and from then on its idea of what is a command and what is
+ * pixel data no longer matches the stream. It never recovers from this.
+ *
+ * Symptoms seen on a Pico 2 + MS2130 (counter app, HSTX 384 MHz):
+ *   - working build:  ~36 HDMI frames per second (76.8 MHz pixel clock,
+ *     1982 x 1084 total), hsdaoh_test synchronizes at once
+ *   - failing build:  ~950 "frames" in the first second, then a steady
+ *     73 per second (twice the correct rate), HDMI clock present, but
+ *     hsdaoh_test never prints "Synchronized to HDMI input stream": the
+ *     MS2130 outputs at most 60 fps, so at 73 fps it keeps dropping frames,
+ *     the frame counter in the metadata is never consecutive and libhsdaoh
+ *     never sees the 5 frames in a row it needs to synchronize
+ *   - USB serial, clocks, voltage, HSTX and DMA registers all look normal
+ *
+ * Whether the race was lost depended on how long core 1 needs to start:
+ * multicore_launch_core1(), the per-core runtime initializers and
+ * core1_entry() run from flash through the XIP cache, so the time depends on
+ * the code layout. The plain counter app built with GCC happened to win the
+ * race. The same app with a printf() added, the la8 app, and any clang build
+ * lost it, which made it look like a problem with printf, USB serial, the
+ * la8 app or the compiler.
+ *
+ * Fix: core 1 signals through the SIO FIFO once DMA_IRQ_3 is handled, and
+ * hsdaoh_start() starts the HSTX DMA only after receiving that signal.
+ * (Nothing else uses the inter-core FIFO after multicore_launch_core1().)
+ */
 #define HSDAOH_CORE1_READY	0x48535458	/* "HSTX" */
 
 void core1_entry()
@@ -302,13 +353,7 @@ void hsdaoh_start(void)
 	multicore_launch_core1(core1_entry);
 
 	/* Start the HSTX DMA only after core 1 has installed its interrupt
-	 * handler. The first transfers are short vblank lines (~25 us each);
-	 * if the chain wraps around before the handler reconfigures a channel,
-	 * that channel restarts with a stale read address and feeds random
-	 * memory to the HSTX command expander, which then stays out of step
-	 * for good (frames at twice the rate, host never synchronizes).
-	 * How long core 1 takes to start depends on flash/XIP timing, i.e. on
-	 * the code layout, so this failed or worked depending on the build. */
+	 * handler, see the description of the startup race above core1_entry(). */
 	while (multicore_fifo_pop_blocking() != HSDAOH_CORE1_READY)
 		;
 
