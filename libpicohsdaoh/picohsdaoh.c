@@ -66,8 +66,8 @@
 #define HSTX_CMD_TMDS_REPEAT	(0x3u << 12)
 #define HSTX_CMD_NOP		(0xfu << 12)
 
-uint16_t idle_line_buf1[MODE_H_ACTIVE_PIXELS];
-uint16_t idle_line_buf2[MODE_H_ACTIVE_PIXELS];
+uint16_t idle_line_buf1[MODE_H_ACTIVE_PIXELS] __attribute__((aligned(4)));
+uint16_t idle_line_buf2[MODE_H_ACTIVE_PIXELS] __attribute__((aligned(4)));
 uint32_t info_p[64];
 uint32_t info_len;
 
