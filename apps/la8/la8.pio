@@ -1,0 +1,49 @@
+;
+; SPDX-License-Identifier: BSD-3-Clause
+;
+; 8 channel logic analyzer input: one 8-bit sample per PIO cycle.
+;
+; Shifting left with autopush at 16 bits packs two samples into the low
+; 16 bits of each FIFO word: the earlier sample in bits 15:8, the later one
+; in bits 7:0. The PC side (hsdaoh_la) undoes this ordering.
+; With a single instruction in the loop, samples are taken at exactly
+; sys_clk / clkdiv with no jitter between them.
+;
+
+.pio_version 0
+.program la8_input
+
+.wrap_target
+	in pins, 8
+.wrap
+
+% c-sdk {
+static inline void la8_input_program_init(PIO pio, uint sm, uint offset, uint pin_base, uint clkdiv)
+{
+	pio_sm_config c = la8_input_program_get_default_config(offset);
+
+	sm_config_set_in_pins(&c, pin_base);
+	pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 8, false);
+
+	for (uint i = pin_base; i < pin_base + 8; i++) {
+		pio_gpio_init(pio, i);
+		gpio_set_pulls(i, false, false);
+	}
+
+	sm_config_set_in_shift(
+		&c,
+		false,	// shift left: earlier sample ends up in the high byte
+		true,	// autopush
+		16	// push after two samples
+	);
+
+	// we only receive: join the FIFOs for an 8 entry RX FIFO
+	sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+	// integer divider only, so the sample spacing is exactly uniform
+	sm_config_set_clkdiv(&c, (float)clkdiv);
+
+	pio_sm_init(pio, sm, offset, &c);
+	pio_sm_set_enabled(pio, sm, true);
+}
+%}
