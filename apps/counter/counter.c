@@ -196,22 +196,36 @@ int main()
 	gpio_init(PICO_DEFAULT_LED_PIN);
 	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-	/* once per second, report on USB serial how many HDMI frames were sent
-	 * (for comparing with la8's '?' output). Output only, no input is read. */
+	/* HDMI frames per second, measured by the firmware itself.
+	 * The first 10 seconds are measured silently (no USB serial use at all)
+	 * and printed afterwards, then one line per second is printed live.
+	 * This shows the frame rate both without and with USB serial activity. */
 	extern metadata_t metadata;
+	uint16_t quiet[10];
 	uint16_t last_fc = metadata.framecounter;
 	bool led = false;
-	while (1) {
+	for (uint t = 0;; t++) {
 		led = !led;
 		gpio_put(PICO_DEFAULT_LED_PIN, led);
 		sleep_ms(500);
-		if (!led) {
-			uint16_t fc = metadata.framecounter;
-			printf("counter: HDMI frames in 1 s: %u (framecounter %u)  sys %lu kHz  hstx %lu kHz\n",
-			       (uint16_t)(fc - last_fc), fc,
-			       (unsigned long)frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS),
-			       (unsigned long)frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_HSTX));
-			last_fc = fc;
+		led = !led;
+		gpio_put(PICO_DEFAULT_LED_PIN, led);
+		sleep_ms(500);
+
+		uint16_t fc = metadata.framecounter;
+		uint16_t n = (uint16_t)(fc - last_fc);
+		last_fc = fc;
+
+		if (t < 10) {
+			quiet[t] = n;		/* no printf yet */
+			continue;
 		}
+		if (t == 10) {
+			printf("counter: HDMI frames per second during the first 10 s, before any USB serial output:");
+			for (uint i = 0; i < 10; i++)
+				printf(" %u", quiet[i]);
+			printf("\n");
+		}
+		printf("counter: t=%us HDMI frames in 1 s: %u (framecounter %u)\n", t, n, fc);
 	}
 }
