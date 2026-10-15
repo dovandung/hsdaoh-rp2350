@@ -34,6 +34,8 @@
 #include "hardware/dma.h"
 #include "hardware/pio.h"
 #include "hardware/pll.h"
+#include "hardware/structs/hstx_ctrl.h"
+#include "hardware/structs/hstx_fifo.h"
 
 #include "picohsdaoh.h"
 #include "la8.pio.h"
@@ -150,6 +152,47 @@ static void print_status(void)
 	printf("commands: div <n>   ?\n");
 }
 
+/* diagnostics for the '?' command: what the clocks, HDMI output and DMA
+ * are actually doing on the running chip */
+extern metadata_t metadata;
+extern uint16_t idle_line_buf1[];
+
+static void print_diag(void)
+{
+	printf("measured kHz: sys %lu  hstx %lu  usb %lu  ref %lu   vreg sel %d\n",
+	       (unsigned long)frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS),
+	       (unsigned long)frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_HSTX),
+	       (unsigned long)frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_USB),
+	       (unsigned long)frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_REF),
+	       (int)vreg_get_voltage());
+
+	uint16_t fc0 = metadata.framecounter;
+	sleep_ms(1000);
+	uint16_t fc1 = metadata.framecounter;
+	printf("HDMI frames in 1 s: %u (framecounter %u)  magic %08lx  stream0 format %u srate %lu\n",
+	       (uint16_t)(fc1 - fc0), fc1, (unsigned long)metadata.magic,
+	       metadata.stream0_format, (unsigned long)metadata.stream_info[0].srate);
+
+	uint32_t st = hstx_fifo_hw->stat;
+	hstx_fifo_hw->stat = HSTX_FIFO_STAT_WOF_BITS;	/* clear the write-overflow flag */
+	printf("hstx csr %08lx  expand_shift %08lx  expand_tmds %08lx  fifo stat %03lx\n",
+	       (unsigned long)hstx_ctrl_hw->csr, (unsigned long)hstx_ctrl_hw->expand_shift,
+	       (unsigned long)hstx_ctrl_hw->expand_tmds, (unsigned long)st);
+
+	for (uint ch = 0; ch < 16; ch++) {
+		if (ch > 1 && ch < 13)
+			continue;
+		dma_channel_hw_t *c = &dma_hw->ch[ch];
+		printf("dma%-2u read %08lx write %08lx count %5lu ctrl %08lx\n", ch,
+		       (unsigned long)c->read_addr, (unsigned long)c->write_addr,
+		       (unsigned long)c->transfer_count, (unsigned long)c->al1_ctrl);
+	}
+	printf("pio0 fdebug %08lx flevel %08lx   ringbuffer %p  idle_line_buf1 %p\n",
+	       (unsigned long)la_pio->fdebug, (unsigned long)la_pio->flevel,
+	       (void *)ringbuffer, (void *)idle_line_buf1);
+	la_pio->fdebug = 0xffffffff;			/* clear the sticky flags */
+}
+
 static void handle_line(char *line)
 {
 	while (*line == ' ')
@@ -167,6 +210,7 @@ static void handle_line(char *line)
 		print_status();
 	} else if (line[0] == '?' || !strncmp(line, "status", 6)) {
 		print_status();
+		print_diag();
 	} else if (line[0]) {
 		printf("unknown command '%s'\n", line);
 		print_status();
