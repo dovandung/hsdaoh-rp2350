@@ -6,6 +6,21 @@
             "type": "process",
             "isBuildCommand": true,
             "command": "${userHome}/.pico-sdk/ninja/v1.13.2/ninja",
+            "args": ["-C", "${workspaceFolder}/build", "counter"],
+            "group": "build",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            },
+            "problemMatcher": "$gcc",
+            "windows": {
+                "command": "${env:USERPROFILE}/.pico-sdk/ninja/v1.13.2/ninja.exe"
+            }
+        },
+        {
+            "label": "Compile All",
+            "type": "process",
+            "command": "${userHome}/.pico-sdk/ninja/v1.13.2/ninja",
             "args": ["-C", "${workspaceFolder}/build"],
             "group": "build",
             "presentation": {
