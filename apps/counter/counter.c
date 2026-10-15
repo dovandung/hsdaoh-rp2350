@@ -4,6 +4,11 @@
  *
  * PIO counter value example, counter can be verified with hsdaoh_test
  *
+ * 80 MS/s: the HDMI (HSTX) clock runs at 432 MHz from the USB PLL (like the
+ * sdr app), independent of the 300 MHz system clock. The PIO needs 3 cycles
+ * per sample, so 300 MHz / (3 * 1.25) = 80 MS/s exactly. The link carries
+ * 83.3 M words/s at 432 MHz, so this is 96% load.
+ *
  * Copyright (c) 2024 by Steve Markgraf <steve@steve-m.de>
  *
  * SPDX-License-Identifier: BSD-3-Clause
@@ -39,11 +44,19 @@
 #include "hardware/vreg.h"
 #include "hardware/dma.h"
 #include "hardware/pio.h"
+#include "hardware/pll.h"
 
 #include "picohsdaoh.h"
 #include "counter.pio.h"
 
-#define SYS_CLK		336000
+#define SYS_CLK		300000			/* kHz */
+#define HSTX_CLK_MHZ	432			/* from the USB PLL (VCO 1728 MHz), multiple of 48 */
+#define COUNTER_CLKDIV	1.25f			/* exact in the PIO's 16.8 fixed point divider */
+#define COUNTER_RATE	((uint32_t)(SYS_CLK * 1000.0 / (3 * COUNTER_CLKDIV) + 0.5))	/* 80 MS/s */
+
+#if HSTX_CLK_MHZ % 48
+#error "HSTX_CLK_MHZ must be a multiple of 48 so the USB clock can stay at 48 MHz"
+#endif
 
 #define DMACH_PIO_PING 0
 #define DMACH_PIO_PONG 1
@@ -72,7 +85,7 @@ void init_pio_input(void)
 	PIO pio = pio0;
 	uint offset = pio_add_program(pio, &counter_program);
 	uint sm_data = pio_claim_unused_sm(pio, true);
-	counter_program_init(pio, sm_data, offset);
+	counter_program_init(pio, sm_data, offset, COUNTER_CLKDIV);
 
 	dma_channel_config c;
 	c = dma_channel_get_default_config(DMACH_PIO_PING);
@@ -116,21 +129,37 @@ void init_pio_input(void)
 
 int main()
 {
-	vreg_set_voltage(VREG_VOLTAGE_MAX);
-	sleep_us(SYS_CLK_VREG_VOLTAGE_AUTO_ADJUST_DELAY_US);
+	/* 1.50 V core voltage. This is above VREG_VOLTAGE_MAX (1.30 V), so the
+	 * SDK's voltage limit has to be lifted first. Higher voltage = more heat
+	 * and faster chip wear. */
+	vreg_disable_voltage_limit();
+	vreg_set_voltage(VREG_VOLTAGE_1_50);
+	sleep_ms(100);		/* let the voltage settle before overclocking */
+
 	hsdaoh_set_sys_clock_khz(SYS_CLK);
 
-	/* set HSTX clock to sysclk/1 */
+	/* HSTX from the USB PLL (as in the sdr app). USB still needs 48 MHz,
+	 * so divide the USB clock down before changing the PLL. */
+	hw_write_masked(&clocks_hw->clk[clk_usb].div,
+			(HSTX_CLK_MHZ / 48) << CLOCKS_CLK_USB_DIV_INT_LSB,
+			CLOCKS_CLK_USB_DIV_INT_BITS);
+	pll_init(pll_usb, 1, HSTX_CLK_MHZ * 4 * MHZ, 2, 2);
+
+	/* HSTX clock = PLL_USB / 1 */
 	hw_write_masked(
 		&clocks_hw->clk[clk_hstx].div,
 		1 << CLOCKS_CLK_HSTX_DIV_INT_LSB,
 		CLOCKS_CLK_HSTX_DIV_INT_BITS
 	);
+	hw_write_masked(&clocks_hw->clk[clk_hstx].ctrl,
+			CLOCKS_CLK_HSTX_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB << CLOCKS_CLK_HSTX_CTRL_AUXSRC_LSB,
+			CLOCKS_CLK_HSTX_CTRL_AUXSRC_BITS);
 
 	stdio_init_all();
 
-	hsdaoh_init(GPIO_DRIVE_STRENGTH_4MA, GPIO_SLEW_RATE_SLOW);
-	hsdaoh_add_stream(0, 1, (SYS_CLK/8) * 1000, RBUF_MAX_DATA_LEN, RBUF_DEFAULT_SLICES, ringbuffer);
+	/* 864 Mbit/s per HDMI pin: strong drive, fast slew */
+	hsdaoh_init(GPIO_DRIVE_STRENGTH_12MA, GPIO_SLEW_RATE_FAST);
+	hsdaoh_add_stream(0, 1, COUNTER_RATE, RBUF_MAX_DATA_LEN, RBUF_DEFAULT_SLICES, ringbuffer);
 	hsdaoh_start();
 	init_pio_input();
 

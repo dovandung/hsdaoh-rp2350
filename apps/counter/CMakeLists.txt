@@ -10,6 +10,7 @@ target_link_libraries(counter
 	pico_util
 	hardware_pio
 	hardware_dma
+	hardware_pll
 	libpicohsdaoh
 )
 pico_generate_pio_header(counter ${CMAKE_CURRENT_LIST_DIR}/counter.pio)
