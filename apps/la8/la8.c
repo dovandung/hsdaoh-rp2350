@@ -64,7 +64,7 @@
 #define DMACH_PIO_PONG 1
 
 static bool pio_dma_pong = false;
-uint16_t ringbuffer[RBUF_DEFAULT_TOTAL_LEN];
+uint16_t ringbuffer[RBUF_DEFAULT_TOTAL_LEN] __attribute__((aligned(4)));
 int ringbuf_head = 2;
 
 static PIO la_pio = pio0;

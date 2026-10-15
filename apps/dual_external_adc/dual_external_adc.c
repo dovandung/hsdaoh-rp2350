@@ -68,7 +68,7 @@
 #define DMACH_PIO_PONG 1
 
 static bool pio_dma_pong = false;
-uint16_t ringbuffer[RBUF_DEFAULT_TOTAL_LEN];
+uint16_t ringbuffer[RBUF_DEFAULT_TOTAL_LEN] __attribute__((aligned(4)));
 int ringbuf_head = 2;
 
 void __scratch_y("") pio_dma_irq_handler()
@@ -149,11 +149,11 @@ void init_pio_input(void)
 #define DMACH_AUDIO2_PIO_PONG	5
 
 static bool audio1_pio_dma_pong = false;
-uint16_t audio1_ringbuffer[AUDIO_RBUF_SLICES * RBUF_SLICE_LEN];
+uint16_t audio1_ringbuffer[AUDIO_RBUF_SLICES * RBUF_SLICE_LEN] __attribute__((aligned(4)));
 int audio1_ringbuf_head = 2;
 
 static bool audio2_pio_dma_pong = false;
-uint16_t audio2_ringbuffer[AUDIO_RBUF_SLICES * RBUF_SLICE_LEN];
+uint16_t audio2_ringbuffer[AUDIO_RBUF_SLICES * RBUF_SLICE_LEN] __attribute__((aligned(4)));
 int audio2_ringbuf_head = 2;
 
 void __scratch_y("") audio1_pio_dma_irq_handler()

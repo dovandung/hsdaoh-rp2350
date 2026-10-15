@@ -54,7 +54,7 @@
 #define DMACH_ADC_PONG 1
 
 static bool dma_adc_pong = false;
-uint16_t ringbuffer[RBUF_DEFAULT_TOTAL_LEN];
+uint16_t ringbuffer[RBUF_DEFAULT_TOTAL_LEN] __attribute__((aligned(4)));
 int ringbuf_head = 2;
 
 void __scratch_y("") adc_dma_irq_handler()
