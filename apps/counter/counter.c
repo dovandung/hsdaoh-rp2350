@@ -9,6 +9,10 @@
  *   counter      HSTX 432 MHz, 300 MHz / (3 * 1.25) = 80 MS/s (link load 96%)
  *   counter_70m  HSTX 384 MHz, 315 MHz / (3 * 1.5)  = 70 MS/s (95%)
  *   counter_60m  HSTX 336 MHz, 270 MHz / (3 * 1.5)  = 60 MS/s (93%)
+ * With USB clocked from the system PLL (any HDMI clock, sys 336 MHz):
+ *   counter_74m  HSTX 399 MHz, 336 MHz / (3 * 1.51953125) = 73.71 MS/s (96%)
+ *   counter_75m  HSTX 408 MHz, 336 MHz / (3 * 1.484375)   = 75.45 MS/s (96%)
+ *   counter_78m  HSTX 420 MHz, 336 MHz / (3 * 1.44140625) = 77.70 MS/s (96%)
  *
  * Copyright (c) 2024 by Steve Markgraf <steve@steve-m.de>
  *
@@ -50,20 +54,35 @@
 #include "picohsdaoh.h"
 #include "counter.pio.h"
 
-/* defaults: 80 MS/s; the counter_70m / counter_60m targets override these */
+/* defaults: 80 MS/s; the other counter_* targets in CMakeLists.txt override these */
 #ifndef SYS_CLK
 #define SYS_CLK		300000			/* kHz */
 #endif
 #ifndef HSTX_CLK_MHZ
-#define HSTX_CLK_MHZ	432			/* from the USB PLL (VCO = 4x), multiple of 48 */
+#define HSTX_CLK_MHZ	432			/* HDMI clock from the USB PLL, VCO = 4 x this */
 #endif
 #ifndef COUNTER_CLKDIV
-#define COUNTER_CLKDIV	1.25f			/* exact in the PIO's 16.8 fixed point divider */
+#define COUNTER_CLKDIV	1.25f			/* PIO divider, use multiples of 1/256 (exact) */
 #endif
-#define COUNTER_RATE	((uint32_t)(SYS_CLK * 1000.0 / (3 * COUNTER_CLKDIV) + 0.5))	/* 80 MS/s */
+/* Where USB gets its 48 MHz:
+ *   0 = from the USB PLL: HSTX_CLK_MHZ must be a multiple of 48
+ *   1 = from the system PLL (as the sdr app's USE_SYS_CLK_FOR_USB): SYS_CLK
+ *       must be a multiple of 48 MHz, and HSTX_CLK_MHZ can be anything the
+ *       PLL can make (4 x HSTX_CLK_MHZ must be a multiple of 12 MHz) */
+#ifndef USB_FROM_SYS_PLL
+#define USB_FROM_SYS_PLL 0
+#endif
+#define COUNTER_RATE	((uint32_t)(SYS_CLK * 1000.0 / (3 * COUNTER_CLKDIV) + 0.5))
 
-#if HSTX_CLK_MHZ % 48
-#error "HSTX_CLK_MHZ must be a multiple of 48 so the USB clock can stay at 48 MHz"
+#if (HSTX_CLK_MHZ * 4) % 12
+#error "4 x HSTX_CLK_MHZ (the USB PLL VCO) must be a multiple of the 12 MHz crystal"
+#endif
+#if USB_FROM_SYS_PLL
+#if SYS_CLK % 48000
+#error "with USB_FROM_SYS_PLL, SYS_CLK must be a multiple of 48 MHz (e.g. 288000, 336000)"
+#endif
+#elif HSTX_CLK_MHZ % 48
+#error "HSTX_CLK_MHZ must be a multiple of 48 so USB can stay at 48 MHz (or set USB_FROM_SYS_PLL=1)"
 #endif
 
 #define DMACH_PIO_PING 0
@@ -146,11 +165,18 @@ int main()
 
 	hsdaoh_set_sys_clock_khz(SYS_CLK);
 
-	/* HSTX from the USB PLL (as in the sdr app). USB still needs 48 MHz,
-	 * so divide the USB clock down before changing the PLL. */
+	/* HSTX from the USB PLL (as in the sdr app). USB still needs 48 MHz. */
+#if USB_FROM_SYS_PLL
+	/* move USB to the system PLL first (SYS_CLK / n = 48 MHz), so the USB
+	 * PLL is free for any HDMI clock */
+	clock_configure(clk_usb, 0, CLOCKS_CLK_USB_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
+			SYS_CLK * 1000, 48 * MHZ);
+#else
+	/* divide the USB clock down before changing the PLL */
 	hw_write_masked(&clocks_hw->clk[clk_usb].div,
 			(HSTX_CLK_MHZ / 48) << CLOCKS_CLK_USB_DIV_INT_LSB,
 			CLOCKS_CLK_USB_DIV_INT_BITS);
+#endif
 	pll_init(pll_usb, 1, HSTX_CLK_MHZ * 4 * MHZ, 2, 2);
 
 	/* HSTX clock = PLL_USB / 1 */
@@ -165,7 +191,7 @@ int main()
 
 	stdio_init_all();
 
-	/* 864 Mbit/s per HDMI pin: strong drive, fast slew */
+	/* 2 x HSTX_CLK_MHZ Mbit/s per HDMI pin: strong drive, fast slew */
 	hsdaoh_init(GPIO_DRIVE_STRENGTH_12MA, GPIO_SLEW_RATE_FAST);
 	hsdaoh_add_stream(0, 1, COUNTER_RATE, RBUF_MAX_DATA_LEN, RBUF_DEFAULT_SLICES, ringbuffer);
 	hsdaoh_start();
