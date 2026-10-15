@@ -141,8 +141,9 @@ int main()
 	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
 	bool led = false;
-	while (1)
+	while (1) {
 		led = !led;
 		gpio_put(PICO_DEFAULT_LED_PIN, led);
 		sleep_ms(500);
+	}
 }
