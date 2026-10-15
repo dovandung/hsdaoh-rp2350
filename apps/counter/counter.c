@@ -42,6 +42,7 @@
  * SUCH DAMAGE.
  */
 
+#include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
@@ -195,10 +196,22 @@ int main()
 	gpio_init(PICO_DEFAULT_LED_PIN);
 	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
+	/* once per second, report on USB serial how many HDMI frames were sent
+	 * (for comparing with la8's '?' output). Output only, no input is read. */
+	extern metadata_t metadata;
+	uint16_t last_fc = metadata.framecounter;
 	bool led = false;
 	while (1) {
 		led = !led;
 		gpio_put(PICO_DEFAULT_LED_PIN, led);
 		sleep_ms(500);
+		if (!led) {
+			uint16_t fc = metadata.framecounter;
+			printf("counter: HDMI frames in 1 s: %u (framecounter %u)  sys %lu kHz  hstx %lu kHz\n",
+			       (uint16_t)(fc - last_fc), fc,
+			       (unsigned long)frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_SYS),
+			       (unsigned long)frequency_count_khz(CLOCKS_FC0_SRC_VALUE_CLK_HSTX));
+			last_fc = fc;
+		}
 	}
 }
