@@ -196,14 +196,20 @@ int main()
 	gpio_init(PICO_DEFAULT_LED_PIN);
 	gpio_set_dir(PICO_DEFAULT_LED_PIN, GPIO_OUT);
 
-	/* HDMI frames per second, measured by the firmware itself.
-	 * The first 10 seconds are measured silently (no USB serial use at all)
-	 * and printed afterwards, then one line per second is printed live.
-	 * This shows the frame rate both without and with USB serial activity. */
+	/* Diagnostic, used to find the core 1 startup race in libpicohsdaoh
+	 * (see hsdaoh_start()): set COUNTER_DIAG to 1 to measure the HDMI frame
+	 * rate (correct: ~36/s at HSTX 384 MHz). The first 10 seconds are
+	 * measured without any USB serial use and printed afterwards, then one
+	 * line per second is printed. */
+#ifndef COUNTER_DIAG
+#define COUNTER_DIAG	0
+#endif
+
+	bool led = false;
+#if COUNTER_DIAG
 	extern metadata_t metadata;
 	uint16_t quiet[10];
 	uint16_t last_fc = metadata.framecounter;
-	bool led = false;
 	for (uint t = 0;; t++) {
 		led = !led;
 		gpio_put(PICO_DEFAULT_LED_PIN, led);
@@ -228,4 +234,11 @@ int main()
 		}
 		printf("counter: t=%us HDMI frames in 1 s: %u (framecounter %u)\n", t, n, fc);
 	}
+#else
+	while (1) {
+		led = !led;
+		gpio_put(PICO_DEFAULT_LED_PIN, led);
+		sleep_ms(500);
+	}
+#endif
 }
