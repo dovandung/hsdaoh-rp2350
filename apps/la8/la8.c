@@ -152,8 +152,15 @@ static void print_status(void)
 	printf("commands: div <n>   ?\n");
 }
 
-/* diagnostics for the '?' command: what the clocks, HDMI output and DMA
- * are actually doing on the running chip */
+/* Diagnostic, used to find the core 1 startup race in libpicohsdaoh (see
+ * hsdaoh_start()): set LA8_DIAG to 1 and the '?' command also prints the
+ * measured clocks, the HDMI frame rate (correct: ~36/s at HSTX 384 MHz),
+ * the HSTX FIFO status and the DMA channel registers. */
+#ifndef LA8_DIAG
+#define LA8_DIAG	0
+#endif
+
+#if LA8_DIAG
 extern metadata_t metadata;
 extern uint16_t idle_line_buf1[];
 
@@ -192,6 +199,7 @@ static void print_diag(void)
 	       (void *)ringbuffer, (void *)idle_line_buf1);
 	la_pio->fdebug = 0xffffffff;			/* clear the sticky flags */
 }
+#endif /* LA8_DIAG */
 
 static void handle_line(char *line)
 {
@@ -210,7 +218,9 @@ static void handle_line(char *line)
 		print_status();
 	} else if (line[0] == '?' || !strncmp(line, "status", 6)) {
 		print_status();
+#if LA8_DIAG
 		print_diag();
+#endif
 	} else if (line[0]) {
 		printf("unknown command '%s'\n", line);
 		print_status();
